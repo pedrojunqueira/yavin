@@ -362,7 +362,7 @@ def test_rba(
 
 @app.command()
 def test_rba_minutes(
-    year: int = typer.Option(None, "--year", "-y", help="Year to fetch minutes for (default: current year)"),
+    year: int = typer.Option(None, "--year", "-y", help="Year to fetch minutes for (default: current year, falls back to previous year)"),
     save: bool = typer.Option(False, "--save", "-s", help="Save data to database"),
 ):
     """Test the RBA Meeting Minutes collector."""
@@ -370,18 +370,21 @@ def test_rba_minutes(
     from datetime import datetime as dt
 
     async def _test():
-        target_year = year or dt.now().year
-        console.print(f"[bold]RBA Meeting Minutes Collection - {target_year}[/]\n")
+        display_year = year or f"{dt.now().year} (with fallback)"
+        console.print(f"[bold]RBA Meeting Minutes Collection - {display_year}[/]\n")
 
         collector = RBAMinutesCollector()
-        result = await collector.collect(year=target_year)
+        # Pass year=None to let collector handle fallback to previous year
+        result = await collector.collect(year=year)
 
         if result.success:
             console.print(f"[green]✓ Successfully fetched minutes[/]")
             console.print(f"  Meetings found: {len(result.records)}\n")
 
             if result.records:
-                table = Table(title=f"RBA Meeting Minutes - {target_year}")
+                # Determine year from the records
+                first_year = result.records[0].get("meeting_date", "")[:4] if result.records else "?"
+                table = Table(title=f"RBA Meeting Minutes - {first_year}")
                 table.add_column("Meeting Date", style="cyan")
                 table.add_column("Cash Rate", style="green")
                 table.add_column("Decision", style="white", max_width=60)
@@ -491,6 +494,154 @@ def test_rba_minutes(
                         for chunk in latest_doc.chunks[:3]:
                             preview = chunk.content[:80].replace('\n', ' ')
                             console.print(f"    [{chunk.section_name or 'main'}] {preview}...")
+                    
+            except Exception as e:
+                console.print(f"[red]✗ Failed to save: {e}[/]")
+                raise
+
+    asyncio.run(_test())
+
+
+@app.command()
+def test_rba_statement(
+    year: int = typer.Option(None, "--year", "-y", help="Year to fetch statements for (default: current year with fallback)"),
+    save: bool = typer.Option(False, "--save", "-s", help="Save data to database"),
+):
+    """Test the RBA Monetary Policy Statement collector."""
+    from yavin.collectors.sources.rba import RBAMonetaryPolicyStatementCollector
+    from datetime import datetime as dt
+
+    async def _test():
+        display_year = year or f"{dt.now().year} (with fallback)"
+        console.print(f"[bold]RBA Monetary Policy Statements - {display_year}[/]\n")
+
+        collector = RBAMonetaryPolicyStatementCollector()
+        result = await collector.collect(year=year)
+
+        if result.success:
+            console.print(f"[green]✓ Successfully fetched statements[/]")
+            console.print(f"  Statements found: {len(result.records)}\n")
+
+            if result.records:
+                table = Table(title="RBA Monetary Policy Statements")
+                table.add_column("Date", style="cyan")
+                table.add_column("Cash Rate", style="green")
+                table.add_column("Decision", style="yellow")
+                table.add_column("Change", style="white")
+
+                for record in result.records:
+                    cash_rate = record.get("cash_rate")
+                    rate_str = f"{cash_rate}%" if cash_rate else "N/A"
+                    decision_type = record.get("decision_type", "unknown")
+                    bp_change = record.get("basis_points_change")
+                    change_str = f"{bp_change:+d} bp" if bp_change else "-"
+                    
+                    table.add_row(
+                        record.get("meeting_date", "?"),
+                        rate_str,
+                        decision_type.upper(),
+                        change_str,
+                    )
+
+                console.print(table)
+                
+                # Show latest statement summary
+                latest = result.records[0]
+                console.print(f"\n[bold cyan]Latest Statement ({latest.get('meeting_date')}):[/]")
+                console.print(f"  {latest.get('decision_summary', 'N/A')}")
+        else:
+            console.print(f"[red]✗ Collection failed: {result.error_message}[/]")
+
+        # Save to database if requested
+        if save and result.success and result.records:
+            from yavin.db.session import SyncSessionLocal, init_db_sync
+            from yavin.db.repository import AgentRepository, DocumentRepository
+            
+            console.print("\n[bold]Saving statements to database...[/]")
+            try:
+                init_db_sync()
+                
+                with SyncSessionLocal() as session:
+                    from yavin.db.repository import DataPointRepository
+                    
+                    agent_repo = AgentRepository(session)
+                    agent = agent_repo.get_or_create(
+                        name="housing",
+                        agent_type="housing",
+                        description="Australian Housing Market Monitor"
+                    )
+                    
+                    doc_repo = DocumentRepository(session)
+                    dp_repo = DataPointRepository(session)
+                    saved_count = 0
+                    updated_count = 0
+                    rate_updates = 0
+                    
+                    for record in result.records:
+                        meeting_date = record.get("meeting_date")
+                        cash_rate = record.get("cash_rate")
+                        
+                        # Check if document already exists
+                        existing = doc_repo.get_by_external_id("rba_statement", meeting_date)
+                        
+                        if existing:
+                            updated_count += 1
+                        else:
+                            # Create document
+                            doc = doc_repo.save_document(
+                                agent_id=agent.id,
+                                document_type="rba_statement",
+                                external_id=meeting_date,
+                                title=record.get("title", f"RBA Statement {meeting_date}"),
+                                source_url=record.get("source_url"),
+                                published_at=dt.strptime(meeting_date, "%Y-%m-%d") if meeting_date else None,
+                                content=record.get("content") or record.get("decision_summary", ""),
+                                summary=record.get("decision_summary"),
+                                extra_data={
+                                    "cash_rate": cash_rate,
+                                    "decision_type": record.get("decision_type"),
+                                    "basis_points_change": record.get("basis_points_change"),
+                                }
+                            )
+                            saved_count += 1
+                        
+                        # ALWAYS update the cash rate DataPoint from statement
+                        # This ensures we have the latest rate even before RBA updates their Excel
+                        if cash_rate and meeting_date:
+                            meeting_dt = dt.strptime(meeting_date, "%Y-%m-%d")
+                            # Use the meeting date as the period (YYYY-MM format)
+                            period = meeting_dt.strftime("%Y-%m")
+                            
+                            # Check if we already have a rate for this period
+                            existing_rate = dp_repo.get_latest(agent.id, "interest_rate_cash")
+                            
+                            # Only update if this is newer or different
+                            should_update = True
+                            if existing_rate:
+                                existing_period = existing_rate.period
+                                if existing_period and existing_period >= period:
+                                    # Check if the value is different (rate changed)
+                                    if abs(existing_rate.value - cash_rate) < 0.001:
+                                        should_update = False
+                            
+                            if should_update:
+                                dp_repo.save_data_point(
+                                    agent_id=agent.id,
+                                    metric_name="interest_rate_cash",
+                                    value=cash_rate,
+                                    period=period,
+                                    source="RBA Monetary Policy Statement",
+                                    geography="Australia",
+                                    unit="Per cent",
+                                )
+                                rate_updates += 1
+                    
+                    session.commit()
+                    console.print(f"[green]✓ Saved {saved_count} new statements[/]")
+                    if updated_count:
+                        console.print(f"  Skipped {updated_count} existing statements")
+                    if rate_updates:
+                        console.print(f"[green]✓ Updated {rate_updates} cash rate data point(s)[/]")
                     
             except Exception as e:
                 console.print(f"[red]✗ Failed to save: {e}[/]")

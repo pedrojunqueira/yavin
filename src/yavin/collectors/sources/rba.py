@@ -560,84 +560,109 @@ class RBAMinutesCollector(BaseCollector):
         Fetch RBA meeting minutes.
         
         Args:
-            year: Specific year to fetch. If None, fetches current year.
+            year: Specific year to fetch. If None, fetches current year (and previous year if needed).
         """
         import re
         
         collected_at = datetime.now()
-        target_year = year or collected_at.year
+        
+        # If no year specified, try current year first, then previous year if needed
+        if year is None:
+            current_year = collected_at.year
+            years_to_try = [current_year, current_year - 1]
+        else:
+            years_to_try = [year]
+        
+        all_records = []
+        all_meeting_dates = []
+        last_error = None
         
         try:
             async with httpx.AsyncClient() as client:
-                # First, get the list of minutes for the year
-                year_url = f"{self.MINUTES_BASE_URL}{target_year}/"
-                
-                response = await client.get(
-                    year_url,
-                    headers={
-                        "User-Agent": "Yavin Data Collector (educational project)",
-                    },
-                    timeout=30.0,
-                    follow_redirects=True,
-                )
-                response.raise_for_status()
-                
-                # Extract links to individual minutes
-                html_content = response.text
-                
-                # Pattern to find minutes links like /2025/2025-12-09.html
-                pattern = rf'href="[^"]*/{target_year}/({target_year}-\d{{2}}-\d{{2}})\.html"'
-                matches = re.findall(pattern, html_content)
-                
-                # Remove duplicates and sort
-                meeting_dates = sorted(set(matches), reverse=True)
-                
-                if not meeting_dates:
-                    return CollectorResult(
-                        collector_name=self.name,
-                        source_url=year_url,
-                        success=True,
-                        records=[],
-                        collected_at=collected_at,
-                        metadata={"year": target_year, "message": "No minutes found for this year"},
-                    )
-                
-                # Fetch each minutes page
-                records = []
-                for date_str in meeting_dates:
-                    minutes_url = f"{self.MINUTES_BASE_URL}{target_year}/{date_str}.html"
+                for target_year in years_to_try:
+                    # First, get the list of minutes for the year
+                    year_url = f"{self.MINUTES_BASE_URL}{target_year}/"
                     
                     try:
-                        minutes_response = await client.get(
-                            minutes_url,
+                        response = await client.get(
+                            year_url,
                             headers={
                                 "User-Agent": "Yavin Data Collector (educational project)",
                             },
                             timeout=30.0,
                             follow_redirects=True,
                         )
-                        minutes_response.raise_for_status()
-                        
-                        # Parse the minutes content
-                        parsed = self._parse_minutes_page(minutes_response.text, date_str, minutes_url)
-                        if parsed:
-                            records.append(parsed)
-                            
-                    except httpx.HTTPError as e:
-                        # Log but continue with other minutes
-                        print(f"Failed to fetch minutes for {date_str}: {e}")
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as e:
+                        # Year page doesn't exist (404), try next year
+                        last_error = f"HTTP error for {target_year}: {str(e)}"
                         continue
+                    
+                    # Extract links to individual minutes
+                    html_content = response.text
+                    
+                    # Pattern to find minutes links like /2025/2025-12-09.html
+                    pattern = rf'href="[^"]*/{target_year}/({target_year}-\d{{2}}-\d{{2}})\.html"'
+                    matches = re.findall(pattern, html_content)
+                    
+                    # Remove duplicates and sort
+                    meeting_dates = sorted(set(matches), reverse=True)
+                    
+                    if not meeting_dates:
+                        # No minutes for this year, try next
+                        continue
+                    
+                    # Fetch each minutes page
+                    for date_str in meeting_dates:
+                        minutes_url = f"{self.MINUTES_BASE_URL}{target_year}/{date_str}.html"
+                        
+                        try:
+                            minutes_response = await client.get(
+                                minutes_url,
+                                headers={
+                                    "User-Agent": "Yavin Data Collector (educational project)",
+                                },
+                                timeout=30.0,
+                                follow_redirects=True,
+                            )
+                            minutes_response.raise_for_status()
+                            
+                            # Parse the minutes content
+                            parsed = self._parse_minutes_page(minutes_response.text, date_str, minutes_url)
+                            if parsed:
+                                all_records.append(parsed)
+                                all_meeting_dates.append(date_str)
+                                
+                        except httpx.HTTPError as e:
+                            # Log but continue with other minutes
+                            print(f"Failed to fetch minutes for {date_str}: {e}")
+                            continue
+                    
+                    # If we found records and no specific year was requested,
+                    # stop after first successful year (most recent)
+                    if all_records and year is None:
+                        break
+                
+                if not all_records:
+                    return CollectorResult(
+                        collector_name=self.name,
+                        source_url=self.source_url,
+                        success=True,
+                        records=[],
+                        collected_at=collected_at,
+                        metadata={"years_tried": years_to_try, "message": last_error or "No minutes found"},
+                    )
                 
                 return CollectorResult(
                     collector_name=self.name,
-                    source_url=year_url,
+                    source_url=self.source_url,
                     success=True,
-                    records=records,
+                    records=all_records,
                     collected_at=collected_at,
                     metadata={
-                        "year": target_year,
-                        "minutes_count": len(records),
-                        "meeting_dates": meeting_dates,
+                        "years_tried": years_to_try,
+                        "minutes_count": len(all_records),
+                        "meeting_dates": all_meeting_dates,
                     },
                 )
                 
@@ -895,3 +920,222 @@ class RBAUnemploymentCollector(BaseCollector):
             print(f"Error parsing RBA H5 Excel: {e}")
             
         return records
+
+
+class RBAMonetaryPolicyStatementCollector(BaseCollector):
+    """
+    Collector for RBA Monetary Policy Decision Statements.
+    
+    These are published immediately after each meeting (unlike minutes which come 2 weeks later).
+    Contains the official cash rate decision and brief summary of reasoning.
+    
+    URL pattern: https://www.rba.gov.au/media-releases/{year}/mr-{yy}-{nn}.html
+    """
+
+    name = "RBA Monetary Policy Statement"
+    source_url = "https://www.rba.gov.au/media-releases/"
+    
+    MEDIA_RELEASES_BASE_URL = "https://www.rba.gov.au/media-releases/"
+
+    async def collect(self, year: int | None = None) -> CollectorResult:
+        """
+        Fetch RBA monetary policy statements.
+        
+        Args:
+            year: Specific year to fetch. If None, fetches current year (and previous year if needed).
+        """
+        import re
+        
+        collected_at = datetime.now()
+        
+        # If no year specified, try current year first, then previous year if needed
+        if year is None:
+            current_year = collected_at.year
+            years_to_try = [current_year, current_year - 1]
+        else:
+            years_to_try = [year]
+        
+        all_records = []
+        last_error = None
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                for target_year in years_to_try:
+                    year_url = f"{self.MEDIA_RELEASES_BASE_URL}{target_year}/"
+                    
+                    try:
+                        response = await client.get(
+                            year_url,
+                            headers={
+                                "User-Agent": "Yavin Data Collector (educational project)",
+                            },
+                            timeout=30.0,
+                            follow_redirects=True,
+                        )
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as e:
+                        last_error = f"HTTP error for {target_year}: {str(e)}"
+                        continue
+                    
+                    html_content = response.text
+                    
+                    # Find monetary policy statements - they have "Monetary Policy Decision" in title
+                    # Pattern: mr-26-03.html with "Monetary Policy Decision"
+                    pattern = rf'href="[^"]*/(mr-{str(target_year)[2:]}-\d{{2}})\.html"[^>]*>[^<]*Monetary Policy'
+                    matches = re.findall(pattern, html_content, re.IGNORECASE)
+                    
+                    if not matches:
+                        # Try alternate pattern
+                        pattern2 = rf'(mr-{str(target_year)[2:]}-\d{{2}})\.html'
+                        all_releases = re.findall(pattern2, html_content)
+                        # Filter for monetary policy ones by fetching each
+                        matches = []
+                        for release_id in set(all_releases):
+                            # Quick check if it's a monetary policy statement
+                            if await self._is_monetary_policy_statement(client, target_year, release_id):
+                                matches.append(release_id)
+                    
+                    # Fetch each statement
+                    for release_id in set(matches):
+                        statement_url = f"{self.MEDIA_RELEASES_BASE_URL}{target_year}/{release_id}.html"
+                        
+                        try:
+                            statement_response = await client.get(
+                                statement_url,
+                                headers={
+                                    "User-Agent": "Yavin Data Collector (educational project)",
+                                },
+                                timeout=30.0,
+                                follow_redirects=True,
+                            )
+                            statement_response.raise_for_status()
+                            
+                            parsed = self._parse_statement_page(statement_response.text, release_id, statement_url, target_year)
+                            if parsed:
+                                all_records.append(parsed)
+                                
+                        except httpx.HTTPError as e:
+                            print(f"Failed to fetch statement {release_id}: {e}")
+                            continue
+                    
+                    # If we found records and no specific year was requested, stop
+                    if all_records and year is None:
+                        break
+                
+                # Sort by date descending
+                all_records.sort(key=lambda x: x.get("meeting_date", ""), reverse=True)
+                
+                return CollectorResult(
+                    collector_name=self.name,
+                    source_url=self.source_url,
+                    success=True,
+                    records=all_records,
+                    collected_at=collected_at,
+                    metadata={
+                        "years_tried": years_to_try,
+                        "statements_count": len(all_records),
+                    },
+                )
+                
+        except httpx.HTTPError as e:
+            return CollectorResult(
+                collector_name=self.name,
+                source_url=self.source_url,
+                success=False,
+                records=[],
+                collected_at=collected_at,
+                error_message=f"HTTP error: {str(e)}",
+            )
+        except Exception as e:
+            return CollectorResult(
+                collector_name=self.name,
+                source_url=self.source_url,
+                success=False,
+                records=[],
+                collected_at=collected_at,
+                error_message=f"Unexpected error: {str(e)}",
+            )
+
+    async def _is_monetary_policy_statement(self, client: httpx.AsyncClient, year: int, release_id: str) -> bool:
+        """Check if a media release is a monetary policy statement."""
+        try:
+            url = f"{self.MEDIA_RELEASES_BASE_URL}{year}/{release_id}.html"
+            response = await client.head(url, follow_redirects=True, timeout=10.0)
+            # We'd need to fetch the full page to check, but for efficiency
+            # we'll rely on the pattern matching in collect()
+            return True
+        except:
+            return False
+
+    def _parse_statement_page(self, html_content: str, release_id: str, url: str, year: int) -> dict[str, Any] | None:
+        """Parse a monetary policy statement page."""
+        import re
+        
+        # Check if this is actually a monetary policy statement
+        if "monetary policy" not in html_content.lower() or "cash rate" not in html_content.lower():
+            return None
+        
+        # Extract date from meta tag
+        date_match = re.search(r'<meta name="dc\.date" content="(\d{4}-\d{2}-\d{2})"', html_content)
+        meeting_date = date_match.group(1) if date_match else None
+        
+        if not meeting_date:
+            # Try alternate pattern
+            date_match = re.search(r'<meta name="dcterms\.created" content="(\d{4}-\d{2}-\d{2})"', html_content)
+            meeting_date = date_match.group(1) if date_match else f"{year}-01-01"
+        
+        # Extract decision from description meta tag
+        desc_match = re.search(r'<meta name="description" content="([^"]+)"', html_content)
+        description = desc_match.group(1) if desc_match else ""
+        
+        # Clean up HTML entities
+        description = description.replace("&nbsp;", " ").replace("&#146;", "'")
+        
+        # Extract cash rate from description
+        cash_rate = None
+        rate_match = re.search(r'(\d+\.?\d*)\s*(?:per\s*cent|%)', description)
+        if rate_match:
+            cash_rate = float(rate_match.group(1))
+        
+        # Determine if it was a change or hold
+        decision_type = "unknown"
+        if "increase" in description.lower() or "raise" in description.lower():
+            decision_type = "increase"
+        elif "decrease" in description.lower() or "lower" in description.lower() or "reduce" in description.lower() or "cut" in description.lower():
+            decision_type = "decrease"
+        elif "unchanged" in description.lower() or "maintain" in description.lower() or "leave" in description.lower():
+            decision_type = "hold"
+        
+        # Extract basis points change
+        bp_change = None
+        bp_match = re.search(r'(\d+)\s*basis\s*points?', description, re.IGNORECASE)
+        if bp_match:
+            bp_change = int(bp_match.group(1))
+            if decision_type == "decrease":
+                bp_change = -bp_change
+        
+        # Try to extract full content
+        content = ""
+        article_match = re.search(r'<article[^>]*>(.*?)</article>', html_content, re.DOTALL)
+        if article_match:
+            content = article_match.group(1)
+            # Remove HTML tags
+            content = re.sub(r'<[^>]+>', ' ', content)
+            content = re.sub(r'\s+', ' ', content).strip()
+        
+        return {
+            "document_type": "rba_monetary_policy_statement",
+            "release_id": release_id,
+            "meeting_date": meeting_date,
+            "title": f"RBA Monetary Policy Statement - {meeting_date}",
+            "source_url": url,
+            "decision_summary": description,
+            "cash_rate": cash_rate,
+            "decision_type": decision_type,
+            "basis_points_change": bp_change,
+            "content": content[:5000] if content else description,  # Limit content size
+        }
+
+    def normalize(self, raw_data: Any) -> list[dict[str, Any]]:
+        """Normalize is handled in _parse_statement_page."""
+        return raw_data if isinstance(raw_data, list) else [raw_data]

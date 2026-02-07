@@ -265,6 +265,9 @@ Examples:
             requires_multi_agent=requires_multi,
         )
 
+    # Threshold for "fresh" vs "established" conversation
+    FRESH_THREAD_THRESHOLD = 6  # messages
+
     async def chat(
         self,
         message: str,
@@ -273,6 +276,11 @@ Examples:
     ) -> AgentResponse:
         """
         Process a user message and return a response.
+        
+        Routing strategy:
+        - Fresh threads (< 6 messages): ALWAYS delegate to specialized agent with force_fetch
+          to minimize hallucination and ground responses in real data
+        - Established threads (6+ messages): Use normal routing, rely on conversation context
         
         Args:
             message: The user's message
@@ -283,6 +291,9 @@ Examples:
             AgentResponse with the orchestrator's response
         """
         thread = self._get_or_create_thread(thread_id)
+        
+        # Determine if this is a fresh or established conversation
+        is_fresh_thread = len(thread.messages) < self.FRESH_THREAD_THRESHOLD
         
         # Auto-generate topic from first message if none set
         is_first_message = len(thread.messages) == 0
@@ -304,6 +315,67 @@ Examples:
         # Route the query to determine which agent(s) to use
         routing = await self.route_query(message)
         
+        # Fresh threads: ALWAYS delegate to an agent (prefer grounded responses)
+        # Even if routing score is low, try to find an agent
+        if is_fresh_thread:
+            if routing.agents:
+                # Use the best matching agent with force_fetch
+                top_agent, score = routing.agents[0]
+            elif self.agents:
+                # No routing match, but we have agents - use the first one
+                # This ensures we always ground in data for fresh threads
+                top_agent = list(self.agents.values())[0]
+                score = 0.0
+                routing.reasoning = f"Fresh thread: defaulting to {top_agent.name} for data grounding."
+            else:
+                top_agent = None
+                score = 0.0
+            
+            if top_agent:
+                # Build context with force_fetch flag for fresh threads
+                context = {
+                    "thread_id": thread.thread_id,
+                    "message_count": len(thread.messages),
+                    "routing_score": score,
+                    "force_fetch": True,  # Force data pre-fetch for fresh threads
+                }
+                
+                # Get response from specialized agent
+                agent_response = await top_agent.query(message, context)
+                
+                # Add response to thread
+                thread.messages.append(AIMessage(content=agent_response.content))
+                
+                # Persist assistant response
+                self._persist_message(
+                    thread_id=thread.thread_id,
+                    role="assistant",
+                    content=agent_response.content,
+                    agent_name=top_agent.name,
+                    confidence=agent_response.confidence,
+                    sources_used=agent_response.sources_used,
+                    tool_calls=agent_response.metadata.get("tool_calls"),
+                )
+                
+                return AgentResponse(
+                    agent_name="Orchestrator",
+                    content=agent_response.content,
+                    confidence=agent_response.confidence,
+                    sources_used=agent_response.sources_used,
+                    data_points=agent_response.data_points,
+                    metadata={
+                        "thread_id": thread.thread_id,
+                        "topic": thread.topic,
+                        "routed_to": top_agent.name,
+                        "routing_score": score,
+                        "routing_reasoning": routing.reasoning,
+                        "fresh_thread": True,
+                        "force_fetch": True,
+                        **agent_response.metadata,
+                    },
+                )
+        
+        # Established threads: normal routing logic
         if routing.agents:
             # Route to the most relevant agent
             top_agent, score = routing.agents[0]
@@ -344,6 +416,8 @@ Examples:
                     "routed_to": top_agent.name,
                     "routing_score": score,
                     "routing_reasoning": routing.reasoning,
+                    "fresh_thread": False,
+                    "force_fetch": False,
                     **agent_response.metadata,
                 },
             )
@@ -372,6 +446,9 @@ Examples:
                     "topic": thread.topic,
                     "routed_to": None,
                     "routing_reasoning": routing.reasoning,
+                    "fresh_thread": False,
+                    "force_fetch": False,
+                    "direct_response": True,
                 },
             )
 

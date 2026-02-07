@@ -2,6 +2,8 @@
 Tests for agent functionality.
 """
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 from yavin.agents.specialized.housing import HousingAgent
@@ -57,8 +59,21 @@ class TestHousingAgent:
     @pytest.mark.asyncio
     async def test_query_returns_response(self):
         """Query should return an AgentResponse."""
-        agent = HousingAgent()
-        response = await agent.query("What's the current interest rate?")
+        from langchain_core.messages import AIMessage
+        
+        # Mock the LLM to avoid API calls during tests
+        with patch('yavin.agents.specialized.housing.get_chat_model') as mock_get_model:
+            mock_model = MagicMock()
+            mock_bound = MagicMock()
+            
+            # Create a mock AI response
+            mock_ai_message = AIMessage(content="The current interest rate is 3.85%.")
+            mock_bound.ainvoke = AsyncMock(return_value=mock_ai_message)
+            mock_model.bind_tools = MagicMock(return_value=mock_bound)
+            mock_get_model.return_value = mock_model
+            
+            agent = HousingAgent()
+            response = await agent.query("What's the current interest rate?")
 
         assert response.agent_name == "Housing Agent"
         assert response.content is not None

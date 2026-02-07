@@ -57,7 +57,13 @@ Media agenda shifts constantly. Important topics like housing affordability, eco
 
 ## Project Status
 
-🚧 **Phase 1: Foundation** - In Progress
+✅ **Phase 1: Foundation** - Complete
+
+- Housing Agent fully operational with 11 tools
+- Data collection from ABS, RBA (Excel, Minutes, Statements)
+- 14,000+ data points across 31 metrics
+- Interactive CLI with chat and data commands
+- PostgreSQL storage with full history
 
 See [ROADMAP.md](docs/ROADMAP.md) for detailed development phases.
 
@@ -73,6 +79,7 @@ uv sync
 
 # Copy environment file and add your API keys
 cp .env.example .env
+# Edit .env to add ANTHROPIC_API_KEY
 
 # Start database services
 cd docker && docker compose up -d && cd ..
@@ -80,8 +87,35 @@ cd docker && docker compose up -d && cd ..
 # Run the CLI
 uv run yavin --help
 
-# Test the ABS collector
-uv run yavin test-abs
+# Collect data from all sources
+uv run yavin collect          # Collect from all sources
+uv run yavin collect abs       # ABS only (building approvals, labour, earnings)
+uv run yavin collect rba       # RBA only (rates, inflation, minutes, statements)
+
+# Interactive chat
+uv run yavin chat              # Start interactive chat
+uv run yavin chat "What is the current cash rate?"  # Single question
+
+# View collected data
+uv run yavin data metrics      # List all metrics
+uv run yavin data latest       # Show latest values
+uv run yavin data series interest_rate_cash  # View time series
+```
+
+## Example Questions
+
+```bash
+# Interest rates and monetary policy
+uv run yavin chat "What is the current RBA cash rate?"
+uv run yavin chat "What were the key points from the latest RBA meeting?"
+
+# Housing affordability
+uv run yavin chat "What is the housing affordability for first home buyers?"
+uv run yavin chat "How has the average loan size changed over time?"
+
+# Economic trends
+uv run yavin chat "What has happened to building approvals in 2024?"
+uv run yavin chat "Compare unemployment rate and inflation over the last 2 years"
 ```
 
 ## Documentation

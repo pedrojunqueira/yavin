@@ -159,16 +159,35 @@ class BaseAgent(ABC):
 
 ```sql
 -- Agent registry
-agents (id, name, type, config, enabled, created_at)
+agents (id, name, agent_type, description, config, enabled, created_at, updated_at)
 
--- Collected data points
-data_points (id, agent_id, metric_name, value, timestamp, source, metadata)
+-- Collected data points (14,000+ records)
+data_points (
+  id, agent_id, metric_name, value, value_text,
+  period,        -- e.g., "2025-09" for monthly data
+  timestamp,     -- when collected
+  source,        -- e.g., "ABS", "RBA"
+  geography,     -- e.g., "Australia"
+  unit,          -- e.g., "$", "%"
+  extra_data,    -- JSON metadata
+  created_at
+)
+
+-- Documents (RBA minutes, statements)
+documents (
+  id, agent_id, document_type, external_id,
+  title, source_url, published_at,
+  content,       -- Full document text
+  summary,       -- LLM-generated summary
+  extra_data,    -- e.g., {"cash_rate": 3.85, "decision": "unchanged"}
+  collected_at, created_at, updated_at
+)
 
 -- Collection runs
-collection_runs (id, agent_id, started_at, completed_at, status, records_collected)
+collection_runs (id, agent_id, started_at, completed_at, status, records_collected, errors)
 
--- Media articles
-articles (id, agent_id, title, content, url, published_at, source, sentiment)
+-- Document chunks (for future RAG)
+document_chunks (id, document_id, chunk_index, content, char_start, char_end)
 ```
 
 #### Vector Store (Embeddings)
@@ -261,80 +280,87 @@ User asks question
 
 ---
 
-## Technology Stack
+## Technology Stack (Implemented)
 
-| Component         | Technology            | Rationale                      |
-| ----------------- | --------------------- | ------------------------------ |
-| Language          | Python 3.11+          | AI/ML ecosystem, async support |
-| Backend Framework | FastAPI               | Modern, async, auto-docs       |
-| Task Queue        | Celery + Redis        | Mature, reliable scheduling    |
-| Database          | PostgreSQL + pgvector | Relational + vector in one     |
-| LLM Framework     | LangChain/LangGraph   | Agent orchestration patterns   |
-| LLM Provider      | OpenAI / Anthropic    | TBD based on cost/quality      |
-| Frontend          | Next.js               | React ecosystem, SSR           |
-| Containerization  | Docker + Compose      | Reproducible deployment        |
-| Monitoring        | Prometheus + Grafana  | Optional, for production       |
+| Component         | Technology       | Status | Notes                          |
+| ----------------- | ---------------- | ------ | ------------------------------ |
+| Language          | Python 3.11+     | ✅     | AI/ML ecosystem, async support |
+| Package Manager   | uv               | ✅     | Fast, modern Python packaging  |
+| CLI Framework     | Typer + Rich     | ✅     | Beautiful terminal interface   |
+| Database          | PostgreSQL       | ✅     | Relational with JSON support   |
+| ORM               | SQLAlchemy 2.0   | ✅     | Modern async patterns          |
+| LLM Framework     | LangChain        | ✅     | Tool calling, agent patterns   |
+| LLM Provider      | Anthropic Claude | ✅     | claude-sonnet-4-20250514       |
+| Backend Framework | FastAPI          | ⏳     | Phase 2                        |
+| Task Queue        | Celery + Redis   | ⏳     | Phase 2                        |
+| Frontend          | Next.js          | ⏳     | Phase 3                        |
+| Containerization  | Docker + Compose | ✅     | PostgreSQL only currently      |
 
 ---
 
-## Directory Structure
+## Directory Structure (Current)
 
 ```
 yavin/
 ├── README.md
+├── pyproject.toml             # Project config, dependencies
+├── .env.example               # Environment template
 ├── docs/                      # Documentation
 │   ├── REQUIREMENTS.md
 │   ├── ARCHITECTURE.md
 │   ├── AGENTS.md
+│   ├── DATA_SOURCES.md
 │   ├── ROADMAP.md
-│   └── decisions/            # ADRs
-├── src/
-│   ├── yavin/                # Main package
+│   └── decisions/             # ADRs
+│       ├── 001-agent-framework.md
+│       └── 002-llm-provider.md
+├── src/yavin/                 # Main package
+│   ├── __init__.py
+│   ├── cli.py                 # Typer CLI commands
+│   ├── config.py              # Configuration management
+│   ├── llm.py                 # LLM client setup
+│   ├── agents/
 │   │   ├── __init__.py
-│   │   ├── config.py         # Configuration management
-│   │   ├── api/              # FastAPI routes
-│   │   │   ├── __init__.py
-│   │   │   ├── main.py
-│   │   │   ├── routes/
-│   │   │   └── dependencies.py
-│   │   ├── agents/           # Agent implementations
-│   │   │   ├── __init__.py
-│   │   │   ├── base.py       # Base agent class
-│   │   │   ├── orchestrator.py
-│   │   │   └── specialized/
-│   │   │       ├── __init__.py
-│   │   │       └── housing.py
-│   │   ├── collectors/       # Data collection modules
-│   │   │   ├── __init__.py
-│   │   │   ├── base.py
-│   │   │   └── sources/
-│   │   ├── db/               # Database models and access
-│   │   │   ├── __init__.py
-│   │   │   ├── models.py
-│   │   │   └── repository.py
-│   │   ├── workers/          # Celery tasks
-│   │   │   ├── __init__.py
-│   │   │   └── tasks.py
-│   │   └── utils/
-│   └── tests/
-├── frontend/                  # Web UI (Phase 3)
-├── docker/
-│   ├── Dockerfile
-│   └── docker-compose.yml
-├── scripts/                   # Utility scripts
-├── pyproject.toml
-└── .env.example
+│   │   ├── base.py            # BaseAgent ABC
+│   │   └── specialized/
+│   │       ├── __init__.py
+│   │       └── housing.py     # HousingAgent (11 tools)
+│   ├── collectors/
+│   │   ├── __init__.py
+│   │   ├── base.py            # BaseCollector ABC
+│   │   └── sources/
+│   │       ├── __init__.py
+│   │       ├── abs.py         # ABS SDMX API collector
+│   │       └── rba.py         # RBA collectors (Excel, Minutes, Statements)
+│   └── db/
+│       ├── __init__.py
+│       ├── models.py          # SQLAlchemy models
+│       ├── repository.py      # Data access layer
+│       └── session.py         # Database sessions
+├── tests/
+│   ├── __init__.py
+│   ├── test_agents.py
+│   └── test_collectors.py
+└── docker/
+    └── docker-compose.yml     # PostgreSQL service
 ```
 
 ---
 
 ## Security Considerations
 
-1. **API Keys**: Stored in environment variables or secrets manager
+1. **API Keys**: Stored in environment variables (`.env` file, not committed)
 2. **Database**: Not exposed publicly, accessed only by backend
-3. **Authentication**: JWT-based for API, session-based for web UI
-4. **Rate Limiting**: Prevent abuse of LLM endpoints
-5. **Input Validation**: Sanitize all user inputs
+3. **SQL Injection Protection**:
+   - `query_database` tool only allows SELECT queries
+   - 30+ dangerous SQL keywords blocked (INSERT, UPDATE, DELETE, DROP, ALTER, etc.)
+   - Multiple statements blocked (no semicolons except at end)
+   - SQL comments blocked (prevents hiding malicious code)
+   - 30-second query timeout
+   - Maximum 500 rows returned
+4. **Authentication**: JWT-based for API, session-based for web UI (Phase 2+)
+5. **Rate Limiting**: Prevent abuse of LLM endpoints (Phase 2+)
+6. **Input Validation**: Sanitize all user inputs
 
 ---
 

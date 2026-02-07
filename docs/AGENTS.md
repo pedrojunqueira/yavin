@@ -61,51 +61,95 @@ class AgentCapabilities:
 
 **Domain Keywords**: `housing`, `property`, `real estate`, `mortgage`, `home loan`, `dwelling`, `apartment`, `house prices`, `rent`, `rental`
 
-#### Data Sources
+#### Data Sources (Implemented)
 
-| Source                 | Type     | Frequency  | Data Points                          |
-| ---------------------- | -------- | ---------- | ------------------------------------ |
-| ABS Building Approvals | API      | Monthly    | Dwelling approvals by type and state |
-| RBA Housing Lending    | API      | Monthly    | Housing credit growth, loan balances |
-| RBA Interest Rates     | API      | As changed | Cash rate, mortgage rates            |
-| ABS Migration Data     | API      | Quarterly  | Net overseas migration               |
-| Domain/REA Listings    | Scraping | Weekly     | Number of active listings            |
-| News Articles          | RSS/API  | Daily      | Housing-related news coverage        |
+| Source                 | Type      | Frequency  | Data Points                              | Status |
+| ---------------------- | --------- | ---------- | ---------------------------------------- | ------ |
+| ABS Building Approvals | SDMX API  | Monthly    | Dwelling approvals (10,000+ data points) | ✅     |
+| ABS Labour Force       | SDMX API  | Monthly    | Unemployment, participation (since 1978) | ✅     |
+| ABS Earnings           | SDMX API  | Bi-annual  | Weekly earnings by gender                | ✅     |
+| ABS Lending Indicators | SDMX API  | Monthly    | Average loan sizes by borrower type      | ✅     |
+| RBA Excel Data         | Excel/CSV | Monthly    | Interest rates, inflation, lending rates | ✅     |
+| RBA Meeting Minutes    | HTML      | 8x/year    | Full text for semantic search            | ✅     |
+| RBA Policy Statements  | HTML      | As changed | Cash rate decisions (immediate updates)  | ✅     |
 
-#### Metrics Tracked
+#### Metrics Tracked (31 Total)
 
-- `housing_approvals_total` - Total dwelling approvals
-- `housing_approvals_houses` - House approvals
-- `housing_approvals_apartments` - Apartment approvals
-- `housing_credit_growth` - Year-on-year credit growth
-- `housing_loan_balance_total` - Total outstanding mortgages
-- `interest_rate_cash` - RBA cash rate
-- `interest_rate_mortgage_avg` - Average mortgage rate
-- `net_migration_quarterly` - Net overseas migration
-- `listings_count_sydney` - Active listings in Sydney
-- `listings_count_melbourne` - Active listings in Melbourne
-- `news_article_count` - Number of housing articles (daily)
-- `news_sentiment_avg` - Average sentiment of coverage
+**Housing Approvals (from ABS):**
+
+- `housing_approvals_total` - Total dwelling approvals (monthly, since 1983)
+
+**Interest Rates & Inflation (from RBA):**
+
+- `interest_rate_cash` - RBA cash rate target
+- `inflation_cpi_annual` - Annual CPI inflation
+- `inflation_trimmed_mean_annual` - Core inflation measure
+- `housing_lending_rate_*` - Various lending rates (variable, fixed, investor, owner-occupier)
+
+**Labour Market (from ABS):**
+
+- `unemployment_rate` - Unemployment rate (since 1978)
+- `labour_force_participation_rate` - Participation rate
+- `employment_to_population_ratio` - Employment ratio
+
+**Earnings (from ABS):**
+
+- `fulltime_adult_avg_weekly_ordinary_earnings` - Weekly earnings (total, male, female)
+- `all_employees_avg_weekly_total_earnings` - All employee earnings
+
+**Lending (from ABS):**
+
+- `avg_loan_size_total` - Average loan size (all borrowers)
+- `avg_loan_size_first_home_buyer` - First home buyer average loan
+- `avg_loan_size_owner_occupier` - Owner occupier average loan
+- `avg_loan_size_investor` - Investor average loan
 
 #### Example Questions
 
-1. "How have housing approvals changed over the last 12 months?"
-2. "What's the current interest rate and how has it affected mortgage lending?"
-3. "Is housing still getting media attention? How does current coverage compare to 6 months ago?"
-4. "How does immigration correlate with housing demand?"
-5. "Give me a summary of what's happened in Australian housing since January 2024"
+**Interest Rates & Monetary Policy:**
 
-#### Tools
+1. "What is the current RBA cash rate?"
+2. "What were the key points from the latest RBA meeting?"
+3. "How has inflation changed over the past 2 years?"
+
+**Housing Affordability:** 4. "What is the current housing affordability for first home buyers?" 5. "How has the average loan size grown over time?" 6. "Compare first home buyer loans vs investor loans"
+
+**Economic Analysis:** 7. "How have housing approvals changed over the last 12 months?" 8. "What is the trend in unemployment rate?" 9. "Calculate the average monthly building approvals for each year from 2020 to 2025" 10. "What data do you have available?"
+
+#### Tools (11 Total)
+
+**Data Retrieval:**
 
 ```python
-tools = [
-    get_metric_timeseries(metric_name, start_date, end_date),
-    get_latest_value(metric_name),
-    compare_periods(metric_name, period1, period2),
-    search_articles(query, date_range),
-    get_media_coverage_trend(date_range),
-]
+get_latest_metric(metric_name)          # Get most recent value for a metric
+get_metric_timeseries(metric_name, limit) # Get historical time series
+list_available_metrics()                  # List all metrics in database
+get_metrics_summary()                     # Comprehensive summary with ranges
+query_metric_by_period(metric_name, start, end)  # Query specific date range
 ```
+
+**Analysis Tools:**
+
+```python
+analyze_metric_growth(metric_name, periods)  # Calculate growth %, CAGR, trends
+calculate_affordability(loan_type, income_type)  # Housing affordability analysis
+compare_metrics(metric_names, limit)      # Side-by-side metric comparison
+```
+
+**RBA Documents:**
+
+```python
+get_rba_minutes(limit)                    # Get recent RBA meeting minutes
+search_rba_minutes(query, limit)          # Search minutes by keyword
+```
+
+**Flexible SQL (Read-Only):**
+
+```python
+query_database(sql_query)                 # Execute custom SELECT queries
+```
+
+> **Security Note:** The `query_database` tool only allows SELECT queries. All data-modifying operations (INSERT, UPDATE, DELETE, DROP, etc.) are blocked. Queries have a 30-second timeout and return max 500 rows.
 
 ---
 

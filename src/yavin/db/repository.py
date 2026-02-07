@@ -117,12 +117,12 @@ class DataPointRepository:
         return {(row.metric_name, row.period) for row in result}
 
     def get_latest(self, agent_id: int, metric_name: str) -> DataPoint | None:
-        """Get the most recent data point for a metric."""
+        """Get the most recent data point for a metric by period (not by collection time)."""
         stmt = (
             select(DataPoint)
             .where(DataPoint.agent_id == agent_id)
             .where(DataPoint.metric_name == metric_name)
-            .order_by(DataPoint.timestamp.desc())
+            .order_by(DataPoint.period.desc())
             .limit(1)
         )
         result = self.session.execute(stmt)

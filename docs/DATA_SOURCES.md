@@ -65,11 +65,27 @@ The RBA publishes minutes of Monetary Policy Board meetings two weeks after each
 https://www.rba.gov.au/monetary-policy/rba-board-minutes/{year}/{year}-{month}-{day}.html
 ```
 
+**Monetary Policy Statements** (Implemented ✅):
+
+The RBA publishes statements immediately after each board meeting announcing the cash rate decision. These provide the earliest official confirmation of rate changes.
+
+```
+https://www.rba.gov.au/monetary-policy/rba-board-minutes/{year}/mr-{year}-{month}-{day}.html
+```
+
+The `RBAMonetaryPolicyStatementCollector` extracts:
+
+- Cash rate from statement text
+- Decision (unchanged/increased/decreased)
+- Meeting date for the period
+- Creates/updates `interest_rate_cash` DataPoint immediately
+
 **Data URLs**:
 
 ```
-https://www.rba.gov.au/statistics/tables/xls/f05hist.xls
-https://www.rba.gov.au/statistics/tables/xls/d02hist.xls
+https://www.rba.gov.au/statistics/tables/xls/f05hist.xls  # Lending rates
+https://www.rba.gov.au/statistics/tables/xls/f01dhist.xls # Cash rate history
+https://www.rba.gov.au/statistics/tables/xls/g01hist.xls  # Inflation
 ```
 
 ---
